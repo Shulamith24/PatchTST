@@ -1,5 +1,8 @@
 # code from https://github.com/ts-kim/RevIN, with minor modifications
 
+#用于时间序列数据预处理，在监督训练中：
+#数据标准化：使输入序列具有0均值和单位方差
+#可逆性：可以同时进行标准化和反标准话，使得模型在训练时能够使用标准化数据，而在预测时能够将结果转换为原始尺度。
 import torch
 import torch.nn as nn
 

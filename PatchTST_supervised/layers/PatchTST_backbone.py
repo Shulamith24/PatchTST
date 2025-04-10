@@ -58,23 +58,27 @@ class PatchTST_backbone(nn.Module):
         
     
     def forward(self, z):                                                                   # z: [bs x nvars x seq_len]
-        # norm
+        # 规范化
         if self.revin: 
             z = z.permute(0,2,1)
             z = self.revin_layer(z, 'norm')
             z = z.permute(0,2,1)
             
-        # do patching
-        if self.padding_patch == 'end':
-            z = self.padding_patch_layer(z)
+        #进行patching
+        if self.padding_patch == 'end':z = self.padding_patch_layer(z)
         z = z.unfold(dimension=-1, size=self.patch_len, step=self.stride)                   # z: [bs x nvars x patch_num x patch_len]
         z = z.permute(0,1,3,2)                                                              # z: [bs x nvars x patch_len x patch_num]
+        
+        
+        #TODO 多种patch
+        
+        
         
         # model
         z = self.backbone(z)                                                                # z: [bs x nvars x d_model x patch_num]
         z = self.head(z)                                                                    # z: [bs x nvars x target_window] 
         
-        # denorm
+        # 反规范化
         if self.revin: 
             z = z.permute(0,2,1)
             z = self.revin_layer(z, 'denorm')
@@ -87,12 +91,14 @@ class PatchTST_backbone(nn.Module):
                     )
 
 
+#模型输出头，将特征映射转换为预测结果
+#Flatten+Linear Head
 class Flatten_Head(nn.Module):
     def __init__(self, individual, n_vars, nf, target_window, head_dropout=0):
         super().__init__()
         
-        self.individual = individual
-        self.n_vars = n_vars
+        self.individual = individual    #是否为每个变量创建独立的处理层
+        self.n_vars = n_vars            #变量数量
         
         if self.individual:
             self.linears = nn.ModuleList()
@@ -124,7 +130,7 @@ class Flatten_Head(nn.Module):
         
         
     
-    
+#Time Series Independent Transformer
 class TSTiEncoder(nn.Module):  #i means channel-independent
     def __init__(self, c_in, patch_num, patch_len, max_seq_len=1024,
                  n_layers=3, d_model=128, n_heads=16, d_k=None, d_v=None,
@@ -159,8 +165,8 @@ class TSTiEncoder(nn.Module):  #i means channel-independent
         n_vars = x.shape[1]
         # Input encoding
         x = x.permute(0,1,3,2)                                                   # x: [bs x nvars x patch_num x patch_len]
-        x = self.W_P(x)                                                          # x: [bs x nvars x patch_num x d_model]
-
+        x = self.W_P(x)                                                          # 进行一步线性嵌入成d_model
+        #x -> [batch, n_vars, n_patches, d_model]
         u = torch.reshape(x, (x.shape[0]*x.shape[1],x.shape[2],x.shape[3]))      # u: [bs * nvars x patch_num x d_model]
         u = self.dropout(u + self.W_pos)                                         # u: [bs * nvars x patch_num x d_model]
 

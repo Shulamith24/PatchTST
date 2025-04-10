@@ -3,6 +3,15 @@
 
 ### Emacs ###
 # -*- mode: gitignore; -*-
+
+#dataset
+dataset/
+data/
+*.csv
+
+#results
+results/
+
 *~
 \#*\#
 /.emacs.desktop
@@ -175,7 +184,8 @@ ipython_config.py
 .LSOverride
 
 # Icon must end with two \r
-Icon
+Icon
+
 
 # Thumbnails
 ._*
