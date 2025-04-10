@@ -29,61 +29,117 @@ class PatchTST_backbone(nn.Module):
         if self.revin: self.revin_layer = RevIN(c_in, affine=affine, subtract_last=subtract_last)
         
         # Patching
-        self.patch_len = patch_len
-        self.stride = stride
-        self.padding_patch = padding_patch
-        patch_num = int((context_window - patch_len)/stride + 1)
+        self.patch_len_list = [patch_len * (2 ** i) for i in range(4)]
+        self.stride_list = [stride * (2 ** i) for i in range(4)]
+        self.padding_patch = padding_patch#None
+        
+        patch_num_list = [int((context_window - p) / s + 1) for p, s in zip(self.patch_len_list, self.stride_list)]
+        
         if padding_patch == 'end': # can be modified to general case
-            self.padding_patch_layer = nn.ReplicationPad1d((0, stride)) 
-            patch_num += 1
+            # self.padding_patch_layer = nn.ReplicationPad1d((0, stride)) 
+            # patch_num += 1
+            pass
         
         # Backbone 
-        self.backbone = TSTiEncoder(c_in, patch_num=patch_num, patch_len=patch_len, max_seq_len=max_seq_len,
-                                n_layers=n_layers, d_model=d_model, n_heads=n_heads, d_k=d_k, d_v=d_v, d_ff=d_ff,
-                                attn_dropout=attn_dropout, dropout=dropout, act=act, key_padding_mask=key_padding_mask, padding_var=padding_var,
-                                attn_mask=attn_mask, res_attention=res_attention, pre_norm=pre_norm, store_attn=store_attn,
-                                pe=pe, learn_pe=learn_pe, verbose=verbose, **kwargs)
-
+        self.backbones = nn.ModuleList()
+        for i in range(4):
+            self.backbones.append(
+                TSTiEncoder(
+                    c_in,patch_num=patch_num_list[i],patch_len=self.patch_len_list[i],max_seq_len=max_seq_len,
+                    n_layers=n_layers,d_model=d_model,n_heads=n_heads,d_k=d_k,d_v=d_v,d_ff=d_ff,
+                    attn_dropout=attn_dropout,dropout=dropout,act=act,
+                    key_padding_mask=key_padding_mask,padding_var=padding_var,attn_mask=attn_mask,res_attention=res_attention,
+                    pre_norm=pre_norm,store_attn=store_attn,pe=pe,learn_pe=learn_pe,verbose=verbose,**kwargs
+                )
+            )
+        
         # Head
-        self.head_nf = d_model * patch_num
         self.n_vars = c_in
         self.pretrain_head = pretrain_head
         self.head_type = head_type
         self.individual = individual
 
-        if self.pretrain_head: 
-            self.head = self.create_pretrain_head(self.head_nf, c_in, fc_dropout) # custom head passed as a partial func with all its kwargs
-        elif head_type == 'flatten': 
-            self.head = Flatten_Head(self.individual, self.n_vars, self.head_nf, target_window, head_dropout=head_dropout)
-        
+        self.heads = nn.ModuleList() # Create a ModuleList for heads
+        if self.pretrain_head:
+            # TODO 还没改
+             head_nf = d_model * patch_num_list[0]
+             self.heads.append(self.create_pretrain_head(head_nf, c_in, fc_dropout))
+             # Add placeholders or logic if separate pretrain heads are needed per branch
+             for _ in range(3):
+                 self.heads.append(None) # Placeholder
+
+        elif head_type == 'flatten':
+            for i in range(4): # Create a head for each backbone
+                head_nf = d_model * patch_num_list[i]
+                self.heads.append(Flatten_Head(self.individual, self.n_vars, head_nf, target_window, head_dropout=head_dropout))
+        self.conv_combiner = nn.Conv1d(
+            in_channels=4,    # 4个分支相当于4个输入通道
+            out_channels=1,   # 合并为1个通道
+            kernel_size=1     # 1x1卷积核
+        )
     
     def forward(self, z):                                                                   # z: [bs x nvars x seq_len]
         # 规范化
-        if self.revin: 
+        if self.revin:
             z = z.permute(0,2,1)
             z = self.revin_layer(z, 'norm')
             z = z.permute(0,2,1)
-            
-        #进行patching
-        if self.padding_patch == 'end':z = self.padding_patch_layer(z)
-        z = z.unfold(dimension=-1, size=self.patch_len, step=self.stride)                   # z: [bs x nvars x patch_num x patch_len]
-        z = z.permute(0,1,3,2)                                                              # z: [bs x nvars x patch_len x patch_num]
-        
-        
-        #TODO 多种patch
-        
-        
-        
-        # model
-        z = self.backbone(z)                                                                # z: [bs x nvars x d_model x patch_num]
-        z = self.head(z)                                                                    # z: [bs x nvars x target_window] 
-        
+
+        # Padding (if needed)
+        # if self.padding_patch == 'end':
+        #     #TODO 还没改
+        #      z = self.padding_patch_layer(z) # Original padding uses 'stride', assuming it's the base stride
+
+        branch_outputs = []
+        for i in range(4):
+            # Patching for the i-th branch
+            p_len = self.patch_len_list[i]
+            s_len = self.stride_list[i]
+            # Apply padding within the loop if necessary and 'end' padding isn't universally applicable
+            # Example: if self.padding_patch == 'end': z_padded = nn.ReplicationPad1d((0, s_len))(z) else: z_padded = z
+            # z_patched = z_padded.unfold(dimension=-1, size=p_len, step=s_len).permute(0, 1, 3, 2) # [bs x nvars x patch_num x patch_len]
+
+            # Correct patching: Apply unfold to the potentially padded input z
+            z_unfolded = z.unfold(dimension=-1, size=p_len, step=s_len) # [bs x nvars x patch_num x patch_len]
+            z_patched = z_unfolded.permute(0, 1, 3, 2) # [bs x nvars x patch_len x patch_num] - Swapped last two dims
+
+
+            # Backbone pass
+            backbone_out = self.backbones[i](z_patched) # [bs x n_vars x d_model x patch_num]
+
+            # Head pass
+            head_out = self.heads[i](backbone_out) # [bs x nvars x target_window]
+            branch_outputs.append(head_out)
+
+
+        # Combine outputs using 1x1 Conv1d across branches for each var
+        # Stack outputs along a new dimension (e.g., dim=1):
+        stacked = torch.stack(branch_outputs, dim=1)  # Shape: [bs, 4, n_vars, pred_len]
+
+        permuted = stacked.permute(0, 2, 1, 3)  #[bs,n_vars,4,pred_len]
+
+        # Get dimensions for reshaping
+        bs, n_vars, _, pred_len = permuted.shape
+
+        # Reshape for Conv1d: Treat bs*n_vars as batch, 4 as channels, pred_len as length
+        # Shape: [bs * n_vars, 4, pred_len]
+        reshaped = permuted.reshape(bs * n_vars, 4, pred_len)
+
+        # Apply 1x1 convolution across the 4 branches
+        # Shape: [bs * n_vars, 1, pred_len]
+        combined_reshaped = self.conv_combiner(reshaped)
+
+        combined_squeezed = combined_reshaped.squeeze(1)
+
+        # Reshape back to [bs, n_vars, pred_len]
+        z_out = combined_squeezed.view(bs, n_vars, pred_len)
+
         # 反规范化
-        if self.revin: 
-            z = z.permute(0,2,1)
-            z = self.revin_layer(z, 'denorm')
-            z = z.permute(0,2,1)
-        return z
+        if self.revin:
+            z_out = z_out.permute(0,2,1)
+            z_out = self.revin_layer(z_out, 'denorm')
+            z_out = z_out.permute(0,2,1)
+        return z_out
     
     def create_pretrain_head(self, head_nf, vars, dropout):
         return nn.Sequential(nn.Dropout(dropout),
@@ -123,9 +179,10 @@ class Flatten_Head(nn.Module):
                 x_out.append(z)
             x = torch.stack(x_out, dim=1)                 # x: [bs x nvars x target_window]
         else:
-            x = self.flatten(x)
-            x = self.linear(x)
+            x = self.flatten(x)             #x[batch,n_vars,target_window]
+            x = self.linear(x)              #x[batch,n_vars,pred_len]
             x = self.dropout(x)
+        #TODO 是不是可以加一个残差
         return x
         
         
