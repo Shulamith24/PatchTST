@@ -15,7 +15,7 @@ results/
 #test_results
 test_results/
 checkpoints/
-
+*.pth
 
 #logs
 logs/

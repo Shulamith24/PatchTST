@@ -7,8 +7,11 @@ from utils.metrics import metric
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch import optim
 from torch.optim import lr_scheduler 
+from torch.utils.data.distributed import DistributedSampler
 
 import os
 import time
@@ -22,6 +25,14 @@ warnings.filterwarnings('ignore')
 class Exp_Main(Exp_Basic):
     def __init__(self, args):
         super(Exp_Main, self).__init__(args)
+        # 如果启用了分布式训练，设置分布式环境
+        if self.args.use_multi_gpu and self.args.use_gpu:
+            if not dist.is_initialized():
+                if self.args.local_rank == -1:          #每个进程的本地rank，即GPU编号
+                    self.args.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+                torch.cuda.set_device(self.args.local_rank) #将该进程之后的操作指定到该GPU
+                dist.init_process_group(backend='nccl')     #初始化进程组
+                self.device = torch.device(f'cuda:{self.args.local_rank}')
 
     def _build_model(self):
         model_dict = {
@@ -36,11 +47,23 @@ class Exp_Main(Exp_Basic):
         model = model_dict[self.args.model].Model(self.args).float()
 
         if self.args.use_multi_gpu and self.args.use_gpu:
-            model = nn.DataParallel(model, device_ids=self.args.device_ids)
+            model = model.to(self.device)       # 将模型移到对应设备
+            # 使用DistributedDataParallel包装模型，实现训练时梯度同步
+            model = DDP(model, device_ids=[self.args.local_rank], output_device=self.args.local_rank)
         return model
 
     def _get_data(self, flag):
         data_set, data_loader = data_provider(self.args, flag)
+        # 为每个进程创建数据加载器，并保证不同进程加载不同的子集
+        if self.args.use_multi_gpu and self.args.use_gpu and flag == 'train':
+            sampler = DistributedSampler(data_set,shuffle=True)  #创建分布式采样器
+            data_loader = torch.utils.data.DataLoader(
+                data_set,
+                batch_size=self.args.batch_size,
+                sampler=sampler,
+                num_workers=self.args.num_workers,
+                pin_memory=True
+            )
         return data_set, data_loader
 
     def _select_optimizer(self):
@@ -126,6 +149,10 @@ class Exp_Main(Exp_Basic):
         for epoch in range(self.args.train_epochs):
             iter_count = 0
             train_loss = []
+
+            # 如果使用分布式训练，设置sampler的epoch
+            if self.args.use_multi_gpu and self.args.use_gpu and hasattr(train_loader, 'sampler') and hasattr(train_loader.sampler, 'set_epoch'):
+                train_loader.sampler.set_epoch(epoch)       #动态调整sample使得每个epoch数据划分顺序不同
 
             self.model.train()
             epoch_time = time.time()
@@ -214,6 +241,17 @@ class Exp_Main(Exp_Basic):
         best_model_path = path + '/' + 'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
 
+        # 如果使用分布式训练，确保所有进程同步
+        if self.args.use_multi_gpu and self.args.use_gpu and dist.is_initialized():
+            dist.barrier()
+            # 只在主进程中加载最佳模型
+            if dist.get_rank() == 0:
+                torch.save(self.model.module.state_dict(), best_model_path)
+            dist.barrier()
+            # 所有进程加载同一个模型
+            map_location = {'cuda:%d' % 0: 'cuda:%d' % self.args.local_rank}
+            self.model.module.load_state_dict(torch.load(best_model_path, map_location=map_location))
+
         return self.model
 
     def test(self, setting, test=0):
@@ -221,7 +259,12 @@ class Exp_Main(Exp_Basic):
         
         if test:
             print('loading model')
-            self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
+            if self.args.use_multi_gpu and self.args.use_gpu and dist.is_initialized():
+                # 分布式环境中加载模型
+                map_location = {'cuda:%d' % 0: 'cuda:%d' % self.args.local_rank}
+                self.model.module.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth'), map_location=map_location))
+            else:
+                self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
 
         preds = []
         trues = []
@@ -318,7 +361,12 @@ class Exp_Main(Exp_Basic):
         if load:
             path = os.path.join(self.args.checkpoints, setting)
             best_model_path = path + '/' + 'checkpoint.pth'
-            self.model.load_state_dict(torch.load(best_model_path))
+            if self.args.use_multi_gpu and self.args.use_gpu and dist.is_initialized():
+                # 分布式环境中加载模型
+                map_location = {'cuda:%d' % 0: 'cuda:%d' % self.args.local_rank}
+                self.model.module.load_state_dict(torch.load(best_model_path, map_location=map_location))
+            else:
+                self.model.load_state_dict(torch.load(best_model_path))
 
         preds = []
 
