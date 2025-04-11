@@ -41,6 +41,7 @@ do
       --train_epochs 100\
       --patience 10\
       --lradj 'TST'\
+      --num_workers 0\
       --pct_start 0.2\
-      --itr 1 --batch_size 32 --learning_rate 0.0001 >logs/LongForecasting/$model_name'_'$model_id_name'_'$seq_len'_'$pred_len.log 
+      --itr 1 --batch_size 32 --learning_rate 0.0001 | tee logs/LongForecasting/$model_name'_'$model_id_name'_'$seq_len'_'$pred_len.log 
 done

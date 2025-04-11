@@ -14,11 +14,11 @@ results/
 
 #test_results
 test_results/
+checkpoints/
+
 
 #logs
 logs/
-
-
 
 
 *~
