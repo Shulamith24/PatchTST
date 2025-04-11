@@ -30,7 +30,7 @@ do
       --enc_in 7 \
       --e_layers 3 \
       --n_heads 4 \
-      --d_model 16 \
+      --d_model 128 \
       --d_ff 128 \
       --dropout 0.3\
       --fc_dropout 0.3\
@@ -39,5 +39,5 @@ do
       --stride 8\
       --des 'Exp' \
       --train_epochs 100\
-      --itr 1 --batch_size 128 --learning_rate 0.0001 >logs/LongForecasting/$model_name'_'$model_id_name'_'$seq_len'_'$pred_len.log 
+      --itr 1 --batch_size 128 --learning_rate 0.0001 | tee logs/LongForecasting/$model_name'_'$model_id_name'_'$seq_len'_'$pred_len.log 
 done

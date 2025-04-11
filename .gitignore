@@ -12,6 +12,15 @@ data/
 #results
 results/
 
+#test_results
+test_results/
+
+#logs
+logs/
+
+
+
+
 *~
 \#*\#
 /.emacs.desktop

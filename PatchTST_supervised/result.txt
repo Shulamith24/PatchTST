@@ -1,3 +1,6 @@
 96_96_PatchTST_ETTh1_ftM_sl96_ll48_pl96_dm16_nh4_el3_dl1_df128_fc1_ebtimeF_dtTrue_Exp_0  
 mse:0.39346420764923096, mae:0.4079568088054657, rse:0.5947960019111633
 
+96_96_PatchTST_ETTh1_ftM_sl96_ll48_pl96_dm128_nh4_el3_dl1_df128_fc1_ebtimeF_dtTrue_Exp_0  
+mse:0.37766313552856445, mae:0.39534294605255127, rse:0.5827304720878601
+
