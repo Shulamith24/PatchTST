@@ -1,6 +1,6 @@
 from data_provider.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom, Dataset_Pred
 from torch.utils.data import DataLoader
-
+from torch.utils.data.distributed import DistributedSampler
 data_dict = {
     'ETTh1': Dataset_ETT_hour,
     'ETTh2': Dataset_ETT_hour,
@@ -10,7 +10,7 @@ data_dict = {
 }
 
 
-def data_provider(args, flag):
+def data_provider(args, flag, ddp=False):
     Data = data_dict[args.data]
     timeenc = 0 if args.embed != 'timeF' else 1
 
@@ -25,6 +25,7 @@ def data_provider(args, flag):
         batch_size = 1
         freq = args.freq
         Data = Dataset_Pred
+    #train,val
     else:
         shuffle_flag = True
         drop_last = True
@@ -45,7 +46,8 @@ def data_provider(args, flag):
     data_loader = DataLoader(
         data_set,
         batch_size=batch_size,
-        shuffle=shuffle_flag,
+        shuffle= False if ddp else shuffle_flag,
         num_workers=args.num_workers,
-        drop_last=drop_last)
+        drop_last=drop_last,
+        sampler=DistributedSampler(data_set) if ddp else None)
     return data_set, data_loader

@@ -1,9 +1,15 @@
+import warnings
+warnings.filterwarnings('ignore')
+
 import argparse
 import os
 import torch
 from exp.exp_main import Exp_Main
 import random
 import numpy as np
+from utils.ddp import is_main_process, init_distributed_mode
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Autoformer & Transformer family for Time Series Forecasting')
@@ -92,7 +98,14 @@ if __name__ == '__main__':
     parser.add_argument('--devices', type=str, default='0,1,2,3', help='device ids of multile gpus')
     parser.add_argument('--test_flop', action='store_true', default=False, help='See utils/tools for usage')
 
+    # DDP
+    parser.add_argument('--local_rank', type=int, default=-1, 
+                        help='local rank passed from distributed launcher')
+    parser.add_argument('--debug', action='store_true',default=False, help='调试模式，不使用ddp')
+    parser.add_argument('--acc_steps', type=int, default=1, help='DDP等价于更大的batch=batch_size*acc_steps')
+    parser.add_argument('--ddp', action='store_true', default=False, help='使用ddp')
     args = parser.parse_args()
+
 
     # random seed
     fix_seed = args.random_seed
@@ -101,14 +114,11 @@ if __name__ == '__main__':
     np.random.seed(fix_seed)
 
 
-    args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
+    #分布式训练初始化
+    args.ddp = True if (not args.debug) and args.use_multi_gpu else False
+    init_distributed_mode(args)
 
-    if args.use_gpu and args.use_multi_gpu:
-        args.dvices = args.devices.replace(' ', '')
-        device_ids = args.devices.split(',')
-        args.device_ids = [int(id_) for id_ in device_ids]
-        args.gpu = args.device_ids[0]
-
+    #打印本次实验的信息
     print('Args in experiment:')
     print(args)
 
@@ -135,7 +145,7 @@ if __name__ == '__main__':
                 args.distil,
                 args.des,ii)
 
-            exp = Exp(args)  # set experiments
+            exp = Exp(args,setting)  # set experiments
             print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
             exp.train(setting)
 

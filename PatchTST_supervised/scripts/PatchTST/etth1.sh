@@ -13,10 +13,18 @@ data_path_name=ETTh1.csv
 model_id_name=ETTh1
 data_name=ETTh1
 
+NUM_GPUS=2
+export CUDA_VISIBLE_DEVICES=0,1  # 指定使用哪些GPU
+
 random_seed=2021
 for pred_len in 96 192 336 720
 do
-    python -u run_longExp.py \
+    torchrun --nproc_per_node=$NUM_GPUS \
+            --nnodes=1 \
+            --master_addr="localhost" \
+            --master_port=$(shuf -i 20000-30000 -n 1) \
+            run_longExp.py \
+      --use_multi_gpu \
       --random_seed $random_seed \
       --is_training 1 \
       --root_path $root_path_name \
@@ -37,7 +45,8 @@ do
       --head_dropout 0\
       --patch_len 8\
       --stride 8\
+      --num_workers 0\
       --des 'Exp' \
       --train_epochs 100\
-      --itr 1 --batch_size 128 --learning_rate 0.0001 | tee logs/LongForecasting/$model_name'_'$model_id_name'_'$seq_len'_'$pred_len.log 
+      --itr 1 --batch_size 8 --learning_rate 0.0001 | tee logs/LongForecasting/$model_name'_'$model_id_name'_'$seq_len'_'$pred_len.log 
 done
