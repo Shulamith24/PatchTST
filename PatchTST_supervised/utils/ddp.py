@@ -32,7 +32,7 @@ def is_main_process():              #判断当前进程是否是主进程
 
 
 def init_distributed_mode(args):    #初始化分布式训练模式，添加单卡模式选项
-    if (not args.debug) and args.use_multi_gpu:
+    if args.ddp:
         dist.init_process_group(backend="nccl")
         
         rank = dist.get_rank()

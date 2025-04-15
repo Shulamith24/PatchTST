@@ -5,7 +5,7 @@ fi
 if [ ! -d "./logs/LongForecasting" ]; then
     mkdir ./logs/LongForecasting
 fi
-seq_len=96
+seq_len=512
 model_name=PatchTST
 
 root_path_name=./dataset/
@@ -13,8 +13,9 @@ data_path_name=ETTh1.csv
 model_id_name=ETTh1
 data_name=ETTh1
 
-NUM_GPUS=2
-export CUDA_VISIBLE_DEVICES=0,1  # 指定使用哪些GPU
+NUM_GPUS=3
+export CUDA_VISIBLE_DEVICES=3,4  # 指定使用哪些GPU，python对这三个gpu重新排序，3->0
+export OMP_NUM_THREADS=4
 
 random_seed=2021
 for pred_len in 96 192 336 720
@@ -47,6 +48,7 @@ do
       --stride 8\
       --num_workers 0\
       --des 'Exp' \
-      --train_epochs 100\
-      --itr 1 --batch_size 8 --learning_rate 0.0001 | tee logs/LongForecasting/$model_name'_'$model_id_name'_'$seq_len'_'$pred_len.log 
+      --train_epochs 100 \
+      --patience 20 \
+      --itr 1 --batch_size 32 --learning_rate 0.0001
 done

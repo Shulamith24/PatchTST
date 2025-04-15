@@ -49,5 +49,5 @@ def data_provider(args, flag, ddp=False):
         shuffle= False if ddp else shuffle_flag,
         num_workers=args.num_workers,
         drop_last=drop_last,
-        sampler=DistributedSampler(data_set) if ddp else None)
+        sampler=DistributedSampler(data_set) if (ddp and flag!='test') else None)
     return data_set, data_loader

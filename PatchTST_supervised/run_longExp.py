@@ -80,7 +80,7 @@ if __name__ == '__main__':
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=4, help='data loader num workers')
-    parser.add_argument('--itr', type=int, default=2, help='experiments times')
+    parser.add_argument('--itr', type=int, default=1, help='experiments times')
     parser.add_argument('--train_epochs', type=int, default=100, help='train epochs')
     parser.add_argument('--batch_size', type=int, default=128, help='batch size of train input data')
     parser.add_argument('--patience', type=int, default=10, help='early stopping patience')
@@ -104,6 +104,8 @@ if __name__ == '__main__':
     parser.add_argument('--debug', action='store_true',default=False, help='调试模式，不使用ddp')
     parser.add_argument('--acc_steps', type=int, default=1, help='DDP等价于更大的batch=batch_size*acc_steps')
     parser.add_argument('--ddp', action='store_true', default=False, help='使用ddp')
+    
+if __name__ == '__main__':
     args = parser.parse_args()
 
 
@@ -118,16 +120,18 @@ if __name__ == '__main__':
     args.ddp = True if (not args.debug) and args.use_multi_gpu else False
     init_distributed_mode(args)
 
-    #打印本次实验的信息
-    print('Args in experiment:')
-    print(args)
+    # 记录主进程标识符，因为 args.ddp 可能会在后面被修改
+    is_distributed = args.ddp 
+    is_main = is_main_process() # 存储初始的主进程状态
 
-    Exp = Exp_Main
+    try:
+        print('Args in experiment:')
+        print(args)
 
-    if args.is_training:
-        for ii in range(args.itr):
-            # setting record of experiments
-            setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}'.format(
+        Exp = Exp_Main
+
+        if args.is_training:
+            setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}'.format(
                 args.model_id,
                 args.model,
                 args.data,
@@ -143,41 +147,73 @@ if __name__ == '__main__':
                 args.factor,
                 args.embed,
                 args.distil,
-                args.des,ii)
+                args.des)
 
             exp = Exp(args,setting)  # set experiments
             print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
-            exp.train(setting)
-
-            print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-            exp.test(setting)
-
-            if args.do_predict:
-                print('>>>>>>>predicting : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-                exp.predict(setting, True)
-
+            exp.train()
             torch.cuda.empty_cache()
-    else:
-        ii = 0
-        setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}'.format(args.model_id,
-                                                                                                    args.model,
-                                                                                                    args.data,
-                                                                                                    args.features,
-                                                                                                    args.seq_len,
-                                                                                                    args.label_len,
-                                                                                                    args.pred_len,
-                                                                                                    args.d_model,
-                                                                                                    args.n_heads,
-                                                                                                    args.e_layers,
-                                                                                                    args.d_layers,
-                                                                                                    args.d_ff,
-                                                                                                    args.factor,
-                                                                                                    args.embed,
-                                                                                                    args.distil,
-                                                                                                    args.des, ii)
 
-        exp = Exp(args)  # set experiments
-        print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-        exp.test(setting, test=1)
-        torch.cuda.empty_cache()
-        
+            # --- 训练结束，准备测试 ---
+            if is_distributed and torch.distributed.is_initialized():
+                torch.distributed.barrier() 
+                torch.distributed.destroy_process_group()
+                print("DDP process group destroyed after training.")
+            
+            # --- 仅在原主进程上执行测试 ---
+            if is_main: 
+                args_test = argparse.Namespace(**vars(args)) # 创建 args 的副本以进行修改
+                args_test.ddp = False
+                args_test.use_multi_gpu = False
+                args_test.gpu = 0 # 或者指定一个用于测试的 GPU ID
+                args_test.device = torch.device('cuda:{}'.format(args_test.gpu) if torch.cuda.is_available() else 'cpu')
+                
+                # 使用更新后的 args 创建新的 Exp_Main 实例进行测试
+                exp_test = Exp(args_test, setting) 
+                print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+                exp_test.test(setting) 
+
+                if args.do_predict:
+                    print('>>>>>>>predicting : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+                    exp_test.predict(setting, load=True) # load=True 确保加载模型
+
+                torch.cuda.empty_cache()
+
+
+        else: # 如果 args.is_training 为 False，直接执行测试
+             if is_main: # 非训练模式也只在主进程执行测试
+                ii = 0
+                setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}'.format(args.model_id,
+                                                                                                            args.model,
+                                                                                                            args.data,
+                                                                                                            args.features,
+                                                                                                            args.seq_len,
+                                                                                                            args.label_len,
+                                                                                                            args.pred_len,
+                                                                                                            args.d_model,
+                                                                                                            args.n_heads,
+                                                                                                            args.e_layers,
+                                                                                                            args.d_layers,
+                                                                                                            args.d_ff,
+                                                                                                            args.factor,
+                                                                                                            args.embed,
+                                                                                                            args.distil,
+                                                                                                            args.des)
+                # 确保测试时 args.ddp 为 False
+                args.ddp = False
+                args.use_multi_gpu = False
+                args.local_rank = -1
+                
+                exp = Exp(args, setting)
+                print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+                exp.test(setting)
+                torch.cuda.empty_cache()
+            # else: 非主进程在 is_training=False 时不执行任何操作
+    finally:
+        # 如果手动终止，清理ddp进程组
+        print("Script execution finished.")
+        # 如果 DDP 因为异常提前终止，可能仍需清理
+        if is_distributed and torch.distributed.is_initialized():
+             torch.distributed.destroy_process_group()
+             if is_main:
+                  print("DDP process group potentially destroyed again in finally block (e.g., due to error).")
