@@ -42,12 +42,19 @@ def data_provider(args, flag, ddp=False):
         timeenc=timeenc,
         freq=freq
     )
-    print(flag, len(data_set))
+    
+    if ddp and flag != 'test':
+        if flag == 'train':
+            sampler = DistributedSampler(data_set, shuffle=True)  # 训练集打乱
+        else:
+            sampler = DistributedSampler(data_set, shuffle=False)  # 验证集不打乱
+    else:
+        sampler = None
     data_loader = DataLoader(
         data_set,
         batch_size=batch_size,
         shuffle= False if ddp else shuffle_flag,
         num_workers=args.num_workers,
         drop_last=drop_last,
-        sampler=DistributedSampler(data_set) if (ddp and flag!='test') else None)
+        sampler=sampler)
     return data_set, data_loader

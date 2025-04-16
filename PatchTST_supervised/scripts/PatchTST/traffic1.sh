@@ -53,8 +53,8 @@ do
       --lradj 'TST' \
       --pct_start 0.2 \
       --itr 1 \
-      --batch_size 12 \
-      --learning_rate 0.0001 \
+      --batch_size 16 \
+      --learning_rate 0.0002 \
       --use_gpu True \
       --use_multi_gpu
 done

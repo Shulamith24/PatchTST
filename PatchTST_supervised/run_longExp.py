@@ -124,9 +124,31 @@ if __name__ == '__main__':
     is_distributed = args.ddp 
     is_main = is_main_process() # 存储初始的主进程状态
 
+    # --- DDP 配置: 调整 Batch Size 和学习率 ---
+    if args.ddp:
+        num_gpus = torch.distributed.get_world_size()
+        print(f"DDP detected with world size: {num_gpus}")
+        print(f"Per-GPU batch size: {args.batch_size}")
+        print(f"Global batch size: {args.batch_size * num_gpus}")
+        
+        # 线性缩放学习率 (Linear Scaling Rule)
+        original_lr = args.learning_rate
+        args.learning_rate = args.learning_rate * num_gpus
+        print(f"Applying Linear Scaling Rule for Learning Rate.")
+        print(f"Original learning rate: {original_lr}")
+        print(f"Adjusted learning rate: {args.learning_rate}")
+
+        # 可选: 如果命令行传入的 batch_size 是期望的全局大小，则取消注释下面两行
+        # 并注释掉上面的学习率缩放代码，或者根据需要调整
+        # args.batch_size = args.batch_size // num_gpus
+        # print(f"Adjusted per-GPU batch size: {args.batch_size}")
+    # --- End DDP 配置 ---
+
+
     try:
-        print('Args in experiment:')
-        print(args)
+        if is_main: # 只在主进程打印完整的 args
+            print('Args in experiment:')
+            print(args)
 
         Exp = Exp_Main
 

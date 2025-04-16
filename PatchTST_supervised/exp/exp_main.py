@@ -93,7 +93,7 @@ class Exp_Main(object):
                 else:
                     outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
         f_dim = -1 if self.args.features == 'MS' else 0
-        target_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+        target_y = batch_y[:, -self.args.pred_len:, f_dim:]
         outputs = outputs[:, -self.args.pred_len:, f_dim:]
         return outputs, target_y
     
@@ -118,12 +118,11 @@ class Exp_Main(object):
                                             max_lr = self.args.learning_rate)
 
         
-        #DDP配置
+        # DDP配置,DDP包装模型必须在优化器之后
         if self.ddp:
-            self.model = DDP(self.model, device_ids=[self.device], find_unused_parameters=True)
+            self.model = DDP(self.model, device_ids=[self.device], find_unused_parameters=False)
 
         #4. 设置日志输出参数，打印开始训练标识
-        time_start = time.time()        #每100个iter计算时间
         epoch_time = time.time()        #计算每个epoch的时间
         if self.is_main_process:
             pytorch_total_params = sum(p.numel() for p in self.model.parameters())
@@ -138,43 +137,45 @@ class Exp_Main(object):
             epoch_total_loss_sum = torch.tensor(0.0).to(self.device)
             epoch_total_samples = 0
             self.model.train()
-            time_now = time.time() # 初始化 time_now
             
             #5.2 ddp同步设备
             if self.args.ddp:
                 train_loader.sampler.set_epoch(epoch)
                 dist.barrier()
 
-                #5.3 开始迭代
-                for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
-                    #梯度清零（累计梯度时候加判断条件）
-                    iter_count += 1
-                    model_optim.zero_grad()
+            #5.3 开始迭代
+            time_start = time.time()
+            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
+                #5.3.1 每个iter开始时梯度清零（累计梯度时候加判断条件）
+                iter_count += 1
+                model_optim.zero_grad()
 
-                    #前向传播
-                    batch_x = batch_x.float().to(self.device)
-                    batch_y = batch_y.float().to(self.device)
-                    batch_x_mark = batch_x_mark.float().to(self.device)
-                    batch_y_mark = batch_y_mark.float().to(self.device)
-                    dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                    dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
-                    outputs, target_y = self._forward_pass(batch_x, batch_y, batch_x_mark, dec_inp, batch_y_mark)
+                #5.3.2前向传播
+                batch_x = batch_x.float().to(self.device)
+                batch_y = batch_y.float().to(self.device)
+                batch_x_mark = batch_x_mark.float().to(self.device)
+                batch_y_mark = batch_y_mark.float().to(self.device)
+                dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
+                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
+                outputs, target_y = self._forward_pass(batch_x, batch_y, batch_x_mark, dec_inp, batch_y_mark)
 
-                    #计算梯度，反传梯度，更新模型参数
-                    loss = criterion(outputs, target_y)
-                    current_batch_size = target_y.size(0)
-                    epoch_total_loss_sum += loss.item() * current_batch_size
-                    epoch_total_samples += current_batch_size
-                    loss.backward()
-                    model_optim.step()
+                #5.3.3 在iter内部计算梯度，反传梯度，更新模型参数
+                loss = criterion(outputs, target_y)
+                current_batch_size = target_y.size(0)
+                epoch_total_loss_sum += loss.item() * current_batch_size
+                epoch_total_samples += current_batch_size
+                loss.backward()
+                model_optim.step()
 
-                #打印输出信息，iters循环结束
+                #5.3.4在每个优化器 step 后调用 scheduler.step()
+                scheduler.step()
+
+                #在iter循环过程中打印输出信息
                 if (i + 1) % 100 == 0:
-                    print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
-                    print(f"\titers: {i+1}, epoch: {epoch+1} | 100 iters use_time: {time.time()-time_now:.4f}s")
+                    print("\titers: {0}, epoch: {1} | loss: {2:.7f} |use time:{3:.4f}".format(i + 1, epoch + 1, loss.item(), time.time()-time_start))
                     iter_count = 0
-                    time_now = time.time() # 更新 time_now
-            
+                    time_start = time.time() # 更新 time_start
+                
             # 6. ddp模式下计算所有进程上的平均损失用于输出
             if self.args.ddp:
                 # Synchronize epoch loss and samples across all ranks
@@ -192,33 +193,25 @@ class Exp_Main(object):
             # 初始化 stop_signal 以供所有进程使用
             stop_signal = torch.tensor(0.0).to(self.device)
 
-            if self.args.ddp is False or dist.get_rank() == 0:
-                # 主进程打印时间和损失
-                print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
-                print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
-                    epoch + 1, train_steps, avg_epoch_train_loss, vali_loss, test_loss))
 
-                # 主进程判断早停，若满足条件，计数并保存权重
-                early_stopping(vali_loss, self.model.module if self.args.ddp else self.model, self.path)
+            print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
+            epoch_time = time.time() # 更新 epoch_time
+            print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
+                epoch + 1, train_steps, avg_epoch_train_loss, vali_loss, test_loss))
 
-                # 验证停止信号，设置停止信号（因为是在主进程循环，所以这里只设置了主进程的停止信号）
-                if early_stopping.early_stop:
-                    print("Early stopping")
-                    stop_signal = torch.tensor(1.0).to(self.device)
+            # 主进程判断早停，若满足条件，计数并保存权重
+            early_stopping(vali_loss, self.model.module if self.args.ddp else self.model, self.path)
+
+            # 验证停止信号，设置停止信号（因为是在主进程循环，所以这里只设置了主进程的停止信号）
+            if early_stopping.early_stop:
+                print("Early stopping")
+                stop_signal = torch.tensor(1.0).to(self.device)
 
             if self.args.ddp:   # 设置其他设备的停止信号为0，广播主进程的停止信号到其他设备，若满足条件，break
                 dist.broadcast(stop_signal, src=0)
                 if stop_signal.item() == 1.0:
                     dist.barrier()
                     break
-
-            # 8. 最后调整学习率
-            if self.args.lradj == 'TST':
-                scheduler.step()
-                if self.args.ddp is False or dist.get_rank() == 0:
-                    print('Updating learning rate (TST) to {}'.format(scheduler.get_last_lr()[0]))
-            elif self.args.lradj != 'TST':
-                adjust_learning_rate(model_optim, scheduler, epoch + 1, self.args, printout=(self.args.ddp is False or dist.get_rank() == 0))
 
             #9. TODO amp精度和累计梯度 清理gpu内存
             torch.cuda.empty_cache()
@@ -233,23 +226,21 @@ class Exp_Main(object):
         with torch.no_grad():
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
                 batch_x = batch_x.float().to(self.device)
-                batch_y = batch_y.float()
-
+                batch_y = batch_y.float().to(self.device)
                 batch_x_mark = batch_x_mark.float().to(self.device)
                 batch_y_mark = batch_y_mark.float().to(self.device)
 
                 # decoder input
-                dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
+                dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float().to(self.device)
+                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float()
+                
                 # encoder - decoder
-
                 outputs, target_y = self._forward_pass(batch_x, batch_y, batch_x_mark, dec_inp, batch_y_mark)
 
-                pred = outputs.detach().cpu()
-                true = target_y.detach().cpu()
-                #计算得到当前gpu上的损失
-                loss = criterion(pred, true)
-                batch_size = true.shape[0]
+                # 直接在 GPU 上计算损失
+                loss = criterion(outputs, target_y)
+
+                batch_size = target_y.shape[0]
                 total_loss_sum += loss.item() * batch_size
                 total_samples += batch_size
 
@@ -264,7 +255,7 @@ class Exp_Main(object):
         avg_loss = total_loss_sum / total_samples if total_samples > 0 else 0
 
         # Return the average loss (as a float or tensor, consistency is key)
-        return avg_loss.item() if isinstance(avg_loss, torch.Tensor) else avg_loss
+        return avg_loss.item() if isinstance(avg_loss, torch.Tensor) else float(avg_loss)
 
     def load_ddp_model(self,setting):
         best_model_path = os.path.join(self.args.checkpoints, setting) + '/' + 'checkpoint.pth'

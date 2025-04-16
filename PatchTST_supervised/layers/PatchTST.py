@@ -13,7 +13,7 @@ from layers.PatchTST_layers import *
 from layers.RevIN import RevIN
 
 # Cell
-class PatchTST_backbone(nn.Module):
+class PatchTST(nn.Module):
     def __init__(self, c_in:int, context_window:int, target_window:int, patch_len:int, stride:int, max_seq_len:Optional[int]=1024, 
                  n_layers:int=3, d_model=128, n_heads=16, d_k:Optional[int]=None, d_v:Optional[int]=None,
                  d_ff:int=256, norm:str='BatchNorm', attn_dropout:float=0., dropout:float=0., act:str="gelu", key_padding_mask:bool='auto',
@@ -69,10 +69,7 @@ class PatchTST_backbone(nn.Module):
         z = z.unfold(dimension=-1, size=self.patch_len, step=self.stride)                   # z: [bs x nvars x patch_num x patch_len]
         z = z.permute(0,1,3,2)                                                              # z: [bs x nvars x patch_len x patch_num]
         
-        
         #TODO 多种patch
-        
-        
         
         # model
         z = self.backbone(z)                                                                # z: [bs x nvars x d_model x patch_num]
@@ -92,7 +89,6 @@ class PatchTST_backbone(nn.Module):
 
 
 #模型输出头，将特征映射转换为预测结果
-#Flatten+Linear Head
 class Flatten_Head(nn.Module):
     def __init__(self, individual, n_vars, nf, target_window, head_dropout=0):
         super().__init__()

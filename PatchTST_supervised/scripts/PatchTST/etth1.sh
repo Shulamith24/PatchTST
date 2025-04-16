@@ -14,7 +14,7 @@ model_id_name=ETTh1
 data_name=ETTh1
 
 NUM_GPUS=3
-export CUDA_VISIBLE_DEVICES=3,4  # 指定使用哪些GPU，python对这三个gpu重新排序，3->0
+export CUDA_VISIBLE_DEVICES=3,4,5  # 指定使用哪些GPU，python对这三个gpu重新排序，3->0
 export OMP_NUM_THREADS=4
 
 random_seed=2021
@@ -50,5 +50,5 @@ do
       --des 'Exp' \
       --train_epochs 100 \
       --patience 20 \
-      --itr 1 --batch_size 32 --learning_rate 0.0001
+      --itr 1 --batch_size 12 --learning_rate 0.0001
 done
